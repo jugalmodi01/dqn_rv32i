@@ -8,7 +8,7 @@ This document describes the performance improvements made to the DQN RISC-V inst
 
 #### a. GPU Acceleration
 - **Change**: Added automatic GPU detection and usage with `torch.device`
-- **Impact**: Neural network training can utilize GPU when available, providing 10-100x speedup
+- **Impact**: Neural network training can utilize GPU when available for significant speedup (varies by hardware and model size)
 - **Lines**: 62-63, 66-68, 89, 168-172
 
 #### b. Optimized Action Selection

@@ -60,7 +60,7 @@ class DQNAgent:
         self.batch_size = batch_size
         
         # Set device (GPU if available, otherwise CPU)
-        # Performance: Enables GPU acceleration for 10-100x speedup when available
+        # Performance: Enables GPU acceleration for significant speedup when available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Initialize Q-networks (current and target)

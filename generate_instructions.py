@@ -94,7 +94,7 @@ def train_dqn_agent(analyzer, generator, num_episodes=500, max_instructions_per_
             instr_type = generator.instr_type_map[operation_name]
             
             # Use vectorized operations for state updates
-            # Performance: Vectorized NumPy operations are 10-50x faster than Python loops
+            # Performance: Vectorized NumPy operations are significantly faster than Python loops
             update_mask = np.random.random(len(next_state)) < 0.1
             next_state[update_mask] = np.minimum(1.0, next_state[update_mask] + 0.05)
                     
