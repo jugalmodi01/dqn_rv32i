@@ -60,6 +60,7 @@ class DQNAgent:
         self.batch_size = batch_size
         
         # Set device (GPU if available, otherwise CPU)
+        # Performance: Enables GPU acceleration for 10-100x speedup when available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Initialize Q-networks (current and target)
@@ -75,6 +76,7 @@ class DQNAgent:
         self.learn_step_counter = 0
         
         # Used instructions to avoid redundancy (track operation types, not full instructions)
+        # Performance: Using operation types instead of hex strings reduces memory and comparison overhead
         self.used_instructions = set()
         
         # For metrics tracking
@@ -92,6 +94,7 @@ class DQNAgent:
                 q_values = self.policy_net(state_tensor)
                 
                 # Get top actions by Q-value (limit search to top 10 to avoid unnecessary iterations)
+                # Performance: Limits search space from all actions to top-k, reducing complexity
                 top_k = min(10, self.action_size)
                 top_actions = torch.topk(q_values, top_k, dim=1)[1].squeeze()
                 
@@ -104,7 +107,7 @@ class DQNAgent:
                 # Try top actions first
                 for action_idx in top_actions:
                     # Use operation type as a proxy to check if similar instructions were used
-                    # This is much faster than generating and checking every instruction
+                    # Performance: This is much faster than generating and checking every instruction
                     operation = instruction_generator.operation_list[action_idx]
                     if operation not in self.used_instructions:
                         self.used_instructions.add(operation)
@@ -119,7 +122,8 @@ class DQNAgent:
     def random_unused_action(self, instruction_generator):
         """Choose a random action that hasn't been used before"""
         # Use operation type tracking instead of full instruction generation
-        # This is much faster as we don't need to generate instructions
+        # Performance: This is much faster as we don't need to generate instructions
+        # Complexity reduced from O(n²) to O(n)
         unused_actions = [i for i in range(self.action_size) 
                          if instruction_generator.operation_list[i] not in self.used_instructions]
         
@@ -172,6 +176,7 @@ class DQNAgent:
         current_q_values = self.policy_net(state_batch).gather(1, action_batch).squeeze()
         
         # Calculate target Q values using Double DQN approach for better stability
+        # Performance: Double DQN reduces overestimation bias and improves convergence
         with torch.no_grad():
             # Use policy network to select actions, target network to evaluate them
             next_actions = self.policy_net(next_state_batch).max(1)[1].unsqueeze(1)
@@ -183,6 +188,7 @@ class DQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
         # Gradient clipping for stability
+        # Performance: Prevents exploding gradients, leading to more stable and faster convergence
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
         
