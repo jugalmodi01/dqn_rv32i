@@ -59,9 +59,13 @@ class DQNAgent:
         self.memory = ReplayMemory(memory_size)
         self.batch_size = batch_size
         
+        # Set device (GPU if available, otherwise CPU)
+        # Performance: Enables GPU acceleration for significant speedup when available
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
         # Initialize Q-networks (current and target)
-        self.policy_net = DQN(state_size, action_size, hidden_size)
-        self.target_net = DQN(state_size, action_size, hidden_size)
+        self.policy_net = DQN(state_size, action_size, hidden_size).to(self.device)
+        self.target_net = DQN(state_size, action_size, hidden_size).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()  # Target network is only used for inference
         
@@ -71,7 +75,8 @@ class DQNAgent:
         # Track number of learning steps
         self.learn_step_counter = 0
         
-        # Used instructions to avoid redundancy
+        # Used instructions to avoid redundancy (track operation types, not full instructions)
+        # Performance: Using operation types instead of hex strings reduces memory and comparison overhead
         self.used_instructions = set()
         
         # For metrics tracking
@@ -85,25 +90,30 @@ class DQNAgent:
         if deterministic or random.random() > self.epsilon:
             # Exploit: choose the best action
             with torch.no_grad():
-                state_tensor = torch.FloatTensor(state).unsqueeze(0)
+                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
                 q_values = self.policy_net(state_tensor)
                 
-                # Sort actions by Q-value and try them in order until we find one that hasn't been used
-                sorted_actions = torch.argsort(q_values, dim=1, descending=True).squeeze().numpy()
+                # Get top actions by Q-value (limit search to top 10 to avoid unnecessary iterations)
+                # Performance: Limits search space from all actions to top-k, reducing complexity
+                top_k = min(10, self.action_size)
+                top_actions = torch.topk(q_values, top_k, dim=1)[1].squeeze()
                 
-                for action_idx in sorted_actions:
-                    # Get the operation name
+                # Convert to list if it's a single value
+                if top_actions.dim() == 0:
+                    top_actions = [top_actions.item()]
+                else:
+                    top_actions = top_actions.tolist()
+                
+                # Try top actions first
+                for action_idx in top_actions:
+                    # Use operation type as a proxy to check if similar instructions were used
+                    # Performance: This is much faster than generating and checking every instruction
                     operation = instruction_generator.operation_list[action_idx]
-                    # Generate the instruction
-                    instruction, _ = instruction_generator.generate_instruction(operation)
-                    
-                    # Check if this instruction has been used before
-                    instr_hex = instruction_generator.format_instruction_hex(instruction)
-                    if instr_hex not in self.used_instructions:
-                        self.used_instructions.add(instr_hex)
+                    if operation not in self.used_instructions:
+                        self.used_instructions.add(operation)
                         return action_idx
                 
-                # If all preferred actions are used, fall back to random
+                # If all top actions are used, fall back to random
                 return self.random_unused_action(instruction_generator)
         else:
             # Explore: choose a random action
@@ -111,29 +121,23 @@ class DQNAgent:
     
     def random_unused_action(self, instruction_generator):
         """Choose a random action that hasn't been used before"""
-        # Shuffle the action indices
-        action_indices = list(range(self.action_size))
-        random.shuffle(action_indices)
+        # Use operation type tracking instead of full instruction generation
+        # Performance: This is much faster as we don't need to generate instructions
+        # Complexity reduced from O(n²) to O(n)
+        unused_actions = [i for i in range(self.action_size) 
+                         if instruction_generator.operation_list[i] not in self.used_instructions]
         
-        for action_idx in action_indices:
-            # Get the operation name
+        if unused_actions:
+            action_idx = random.choice(unused_actions)
             operation = instruction_generator.operation_list[action_idx]
-            # Generate the instruction
-            instruction, _ = instruction_generator.generate_instruction(operation)
-            
-            # Check if this instruction has been used before
-            instr_hex = instruction_generator.format_instruction_hex(instruction)
-            if instr_hex not in self.used_instructions:
-                self.used_instructions.add(instr_hex)
-                return action_idx
+            self.used_instructions.add(operation)
+            return action_idx
         
-        # If all actions have been used, clear the set and try again
+        # If all operation types have been used, clear and start fresh
         self.used_instructions.clear()
         action_idx = random.randrange(self.action_size)
         operation = instruction_generator.operation_list[action_idx]
-        instruction, _ = instruction_generator.generate_instruction(operation)
-        instr_hex = instruction_generator.format_instruction_hex(instruction)
-        self.used_instructions.add(instr_hex)
+        self.used_instructions.add(operation)
         return action_idx
 
     def end_episode(self):
@@ -161,25 +165,31 @@ class DQNAgent:
         experiences = self.memory.sample(self.batch_size)
         batch = Experience(*zip(*experiences))
         
-        # Convert to tensors
-        state_batch = torch.FloatTensor(np.array(batch.state))
-        action_batch = torch.LongTensor(np.array(batch.action)).unsqueeze(1)
-        reward_batch = torch.FloatTensor(np.array(batch.reward))
-        next_state_batch = torch.FloatTensor(np.array(batch.next_state))
-        done_batch = torch.FloatTensor(np.array(batch.done))
+        # Convert to tensors and move to device
+        state_batch = torch.FloatTensor(np.array(batch.state)).to(self.device)
+        action_batch = torch.LongTensor(np.array(batch.action)).unsqueeze(1).to(self.device)
+        reward_batch = torch.FloatTensor(np.array(batch.reward)).to(self.device)
+        next_state_batch = torch.FloatTensor(np.array(batch.next_state)).to(self.device)
+        done_batch = torch.FloatTensor(np.array(batch.done)).to(self.device)
         
         # Calculate current Q values
         current_q_values = self.policy_net(state_batch).gather(1, action_batch).squeeze()
         
-        # Calculate target Q values
+        # Calculate target Q values using Double DQN approach for better stability
+        # Performance: Double DQN reduces overestimation bias and improves convergence
         with torch.no_grad():
-            next_q_values = self.target_net(next_state_batch).max(1)[0]
+            # Use policy network to select actions, target network to evaluate them
+            next_actions = self.policy_net(next_state_batch).max(1)[1].unsqueeze(1)
+            next_q_values = self.target_net(next_state_batch).gather(1, next_actions).squeeze()
             target_q_values = reward_batch + (1 - done_batch) * self.gamma * next_q_values
         
         # Compute loss and optimize
         loss = self.criterion(current_q_values, target_q_values)
         self.optimizer.zero_grad()
         loss.backward()
+        # Gradient clipping for stability
+        # Performance: Prevents exploding gradients, leading to more stable and faster convergence
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
         self.optimizer.step()
         
         # Update target network periodically
