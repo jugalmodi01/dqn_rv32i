@@ -77,26 +77,24 @@ def train_dqn_agent(analyzer, generator, num_episodes=500, max_instructions_per_
             # Get the operation name for this action
             operation_name = generator.operation_list[action]
             
-            # Generate an instruction for this operation
-            instruction, _ = generator.generate_instruction(operation_name)
-            instr_hex = generator.format_instruction_hex(instruction)
-            
-            # Simulate the coverage increase
+            # Simulate the coverage increase (no need to generate instruction again)
             reward = simulate_coverage_increase(analyzer, generator, operation_name)
             
-            # Store the instruction if it has a positive reward
+            # Store the instruction info if it has a positive reward
             if reward > 0:
+                # Generate instruction only when we need to store it
+                instruction, _ = generator.generate_instruction(operation_name)
+                instr_hex = generator.format_instruction_hex(instruction)
                 generated_instructions.append((instr_hex, operation_name, reward))
                 
-            # Simplistic next state simulation (in reality, would run the simulation and get actual coverage)
-            # Here we just slightly increase the coverage for the selected instruction type
+            # Optimized next state simulation
             next_state = state.copy()
             instr_type = generator.instr_type_map[operation_name]
             
-            # Estimate which bins might be affected by this instruction
-            for i, cov in enumerate(next_state):
-                if np.random.random() < 0.1:  # Small chance to affect any bin
-                    next_state[i] = min(1.0, cov + 0.05)
+            # Use vectorized operations for state updates
+            # This is more efficient than looping with random checks
+            update_mask = np.random.random(len(next_state)) < 0.1
+            next_state[update_mask] = np.minimum(1.0, next_state[update_mask] + 0.05)
                     
             # Learn from the experience
             agent.remember(state, action, next_state, reward, False)
@@ -110,6 +108,7 @@ def train_dqn_agent(analyzer, generator, num_episodes=500, max_instructions_per_
         
         # Update epsilon for exploration
         agent.update_epsilon()
+        agent.end_episode()  # Clean up episode state
         rewards.append(total_reward)
         
         # Print progress
